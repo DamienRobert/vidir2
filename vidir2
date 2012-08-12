@@ -1,0 +1,333 @@
+#!/usr/bin/perl
+
+=head1 NAME
+
+vidir - edit directory (fork with symlinks support)
+
+=head1 SYNOPSIS
+
+B<vidir> [--verbose -l] [directory|file|-] ...
+
+=head1 DESCRIPTION
+
+vidir allows editing of the contents of a directory in a text editor. If no
+directory is specified, the current directory is edited. 
+
+When editing a directory, each item in the directory will appear on its own
+numbered line. These numbers are how vidir keeps track of what items are
+changed. Delete lines to remove files from the directory, or
+edit filenames to rename files. You can also switch pairs of numbers to
+swap filenames.
+
+Note that if "-" is specified as the directory to edit, it reads a list of
+filenames from stdin and displays those for editing. Alternatively, a list
+of files can be specified on the command line.
+
+=head1 OPTIONS
+
+=over 4
+
+=item -v, --verbose
+
+Verbosely display the actions taken by the program.
+
+=item -l, --links
+
+Allow to modify symlinks
+
+=back
+
+=head1 EXAMPLES
+
+=over 4
+
+=item vidir
+
+=item vidir *.jpeg
+
+Typical uses.
+
+=item find | vidir -
+
+Edit subdirectory contents too. To delete subdirectories,
+delete all their contents and the subdirectory itself in the editor.
+
+=item find -type f | vidir -
+
+Edit all files under the current directory and subdirectories.
+
+=back
+
+=head1 ENVIRONMENT VARIABLES
+
+=over 4
+
+=item EDITOR
+
+Editor to use.
+
+=item VISUAL
+
+Also supported to determine what editor to use.
+
+=back
+
+=head1 AUTHOR
+
+Copyright 2006 by Joey Hess <joey@kitenet.net>
+
+Modified 2011-2012 by Damien Robert <damien.robert__github@normalesup.org>
+
+Licensed under the GNU GPL.
+
+=cut
+
+use File::Spec;
+use File::Temp;
+use Getopt::Long;
+use strict;
+
+my $error=0;
+
+my $verbose=0;
+my $linktargets=0;
+my $opt_recursive=0;
+my $opt_mkdir=0;
+my $opt_force=0;
+my $opt_interactive=0;
+my $opt_noclobber=0;
+if (! GetOptions("verbose|v" => \$verbose,
+    "linktargets|l" => \$linktargets,
+                "recursive|r" => \$opt_recursive,
+                "dirs|d" => \$opt_mkdir,
+                "force|f" => \$opt_force,
+                "interactive|i" => \$opt_interactive,
+                "no_clobber|n" => \$opt_noclobber)) {
+  die "Usage: $0 [--verbose --linktargets] [directory|file|-]\n";
+}
+#By defaut: on copy interactive mode unless -f is given
+#On rm no -i given, unless -r is passed (unless -f is passed)
+my $cpoptions="-vi"; my $rmoptions="-v";
+if ($opt_recursive) { $cpoptions="${cpoptions}r"; $rmoptions="${rmoptions}ri"};
+if ($opt_force) { $cpoptions="${cpoptions}f"; $rmoptions="${rmoptions}f" };
+if ($opt_interactive) { $cpoptions="${cpoptions}i"; $rmoptions="${rmoptions}i" };
+if ($opt_noclobber) { $cpoptions="${cpoptions}n" };
+
+my @dir;
+if (! @ARGV) {
+  push @ARGV, "."
+}
+foreach my $item (@ARGV) {
+  if ($item eq "-") {
+    push @dir, map { chomp; $_ } <STDIN>;
+    close STDIN;
+    open(STDIN, "/dev/tty") || die "reopen: $!\n";
+  }
+  elsif (-d $item) {
+    $item =~ s{/?$}{/};
+    opendir(DIR, $item) || die "$0: cannot read $item: $!\n";
+    push @dir, map { "$item$_" } sort readdir(DIR);
+    closedir DIR;
+  }
+  else {
+    push @dir, $item;
+  }
+}
+
+if (grep(/[[:cntrl:]]/, @dir)) {
+  die "$0: control characters in filenames are not supported\n";
+}
+
+my $tmp=File::Temp->new(TEMPLATE => "vidir.XXXXX", DIR => File::Spec->tmpdir);
+open (OUT, ">".$tmp->filename) || die "$0: cannot create ".$tmp->filename.": $!\n";
+
+my %item;
+my %curitem; #where item{$i} is right now
+my %iteml;
+my $c=0;
+foreach (@dir) {
+  next if /^(.*\/)?\.$/ || /^(.*\/)?\.\.$/;
+  $item{++$c}=$_;
+  $curitem{$c}=$_;
+  if ( $linktargets && -l $_ ) {
+    my $l = readlink($_);
+    $iteml{$c}=$l;
+    print OUT "$c\t$_\t->\t$l\n";
+  }
+        elsif (-d $_ && ! -l $_) {
+    print OUT "$c\t$_/\n";
+          $item{$c}="$_/";
+          $curitem{$c}="$_";
+        }
+  else {
+    print OUT "$c\t$_\n";
+  }
+}
+@dir=();
+close OUT || die "$0: cannot write ".$tmp->filename.": $!\n";
+
+my @editor="vi";
+if (-x "/usr/bin/editor") {
+  @editor="/usr/bin/editor";
+}
+if (exists $ENV{EDITOR}) {
+  @editor=split(' ', $ENV{EDITOR});
+}
+if (exists $ENV{VISUAL}) {
+  @editor=split(' ', $ENV{VISUAL});
+}
+my $ret=system(@editor, $tmp);
+if ($ret != 0) {
+  die "@editor exited nonzero, aborting\n";
+}
+
+open (IN, $tmp->filename) || die "$0: cannot read ".$tmp->filename.": $!\n";
+while (<IN>) {
+  chomp;
+  if (/^(\d+)\t{0,1}(.*)/) {
+    my $num=int($1);
+    my $name=$2;
+    my $link;
+    if ( $linktargets && $name=~/(.*)\t\-\>\t(.*)/) {
+      $name=$1;
+      $link=$2;
+    }
+    if (! exists $item{$num}) {
+      if ( exists $curitem{$num}) {
+        my $curfile=$curitem{$num};
+        print "cp $cpoptions $curfile $name\n" if ($verbose);
+        system("cp",$cpoptions,$curfile,$name)==0 or warn "Error in cp: $!\n";
+        next;
+      }
+      else {
+        warn "$0: unknown item number $num\n";
+        next;
+      }
+    }
+    if ($name ne $item{$num} and length $name) {
+      my $src=$curitem{$num};
+      
+      if (! (-e $src || -l $src) ) {
+        print STDERR "$0: $src does not exist\n";
+        delete $item{$num};
+        next;
+      }
+
+      # deal with swaps
+      if (-e $name || -l $name) {
+        my $tmp = $name;
+        $tmp =~ s{/?$}{};
+        $tmp=$tmp."~";
+        my $c=0;
+        while (-e $tmp || -l $tmp) {
+          $c++;
+          $tmp=$name."~$c";
+        }
+        if (! rename($name, $tmp)) {
+          print STDERR "$0: failed to rename $name to $tmp: $!\n";
+          $error=1;
+        }
+        else {
+          print "'$name' -> '$tmp'\n" if ($verbose);
+          if (-d $tmp) {
+            $tmp=$tmp."/";
+            foreach (values %curitem) {
+              s/^\Q$name\E/$tmp/;
+            }
+          }
+          else {
+            foreach my $item (keys %curitem) {
+              if ($curitem{$item} eq $name) {
+                $curitem{$item}=$tmp;
+              }
+            }
+          }
+        }
+      }
+
+      if ($opt_mkdir) {
+        ( undef , my $dir, undef ) = File::Spec->splitpath($name);
+        print "mkdir -p $dir\n" if ($verbose);
+        system("mkdir","-p",$dir);
+      }
+      if (! rename($src, $name)) {
+        print STDERR "$0: failed to rename $src to $name: $!\n";
+        $error=1;
+      }
+      else {
+        $curitem{$num}=$name;
+        if (-d $name) {
+          foreach (values %curitem) {
+            s/^\Q$src\E/$name/;
+          }
+        }
+        if ($verbose) {
+          print "'$src' => '$name'\n";
+        }
+      }
+    };
+    if ($linktargets and $link ne $iteml{$num} and length $link) {
+      my $oldlink=$iteml{$num};
+      if ($link ne $oldlink) {
+        if (! -e $link ) {
+          print STDERR "$0: Warning, want to link $link to $name, but $link does not exist\n";
+        }
+        if (-e $name and ! -l $name ) {
+          print STDERR "$0: Don't link $link to $name, $name is not a symlink\n";
+          $error=1;
+        }
+        else {
+          unlink($name);
+          if (! symlink($link, $name) )         {
+            print STDERR "$0: failed to create link $name -> $link\n";
+            $error=1;
+          }
+          else {
+            if ($verbose) {
+              print "Changing link: '$oldlink' => '$link' in '$name'\n";
+            }
+          }
+        }
+      }
+    };
+    delete $item{$num};
+  }
+  elsif (/^\s*$/) {
+    # skip empty line
+  }
+  else {
+    die "$0: unable to parse line \"$_\", aborting\n";
+  }
+}
+close IN || die "$0: cannot read ".$tmp->filename.": $!\n";
+unlink($tmp.'~') if -e $tmp.'~';
+
+sub rm {
+  my $file = shift;
+        if ($rmoptions eq "-vi" ) {
+          print "rm $rmoptions $file\n" if ($verbose);
+          return !system("rm",$rmoptions,$file);
+        }
+        else {
+          if (-d $file && ! -l $file) {
+                  return rmdir $file;
+          }
+          else {
+                  return unlink $file;
+          }
+        }
+}
+
+foreach my $item (reverse sort values %item) {
+  if (! rm($item)) {
+    print STDERR "$0: failed to remove $item: $!\n";
+    $error=1;
+  }
+  else {
+    if ($verbose) {
+      print "removed '$item'\n";
+    }
+  }
+}
+
+exit $error;
