@@ -2,7 +2,7 @@ vidir2
 ======
 
 `vidir2` is based on the original `vidir` utility from
-[moreutils](joeyh.name/code/moreutils/). As such it is realeased under the
+[moreutils](http://joeyh.name/code/moreutils/). As such it is realeased under the
 GPLv2 Licence.
 
 Some improvements over the original `vidir` consist of being able to copy
