@@ -12,3 +12,9 @@ where symlinks point to.
 *Warning* This utility is used to change files, in particular it can delete
 files on the filesystem, so use it with care, especially whith the `-f`
 switch!
+
+## Copyright
+
+Copyright © 2011-2012 Damien Robert
+
+GPLv2 License. See {file:COPYING} for more details.
