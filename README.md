@@ -15,6 +15,6 @@ switch!
 
 ## Copyright
 
-Copyright © 2011–2012 Damien Robert
+Copyright © 2011–2016 Damien Robert
 
 GPLv2 License. See {file:COPYING} for more details.
