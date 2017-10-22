@@ -17,4 +17,4 @@ switch!
 
 Copyright © 2011–2016 Damien Robert
 
-GPLv2 License. See {file:COPYING} for more details.
+GPLv2 License. See [COPYING](./COPYING) for more details.
